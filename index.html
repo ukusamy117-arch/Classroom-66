@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ko" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Light Proxy</title>
+<link id="fav" rel="icon" href="data:,">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: 'class' }</script>
+</head>
+<body class="bg-neutral-950 text-neutral-200 min-h-screen flex items-center justify-center p-4">
+<main class="w-full max-w-xl">
+  <h1 class="text-center text-3xl font-semibold tracking-tight text-white mb-8">Light Proxy</h1>
+
+  <form id="f" class="flex gap-2" autocomplete="off">
+    <input id="q" type="text" inputmode="url" spellcheck="false" autofocus
+      placeholder="URL 또는 검색어를 입력하세요"
+      class="flex-1 rounded-xl bg-neutral-900 border border-neutral-800 px-4 py-3 outline-none focus:border-sky-500 placeholder-neutral-600">
+    <button class="rounded-xl bg-sky-600 hover:bg-sky-500 px-6 py-3 font-medium text-white">Go</button>
+  </form>
+  <p id="msg" class="mt-3 min-h-5 text-center text-sm text-neutral-500"></p>
+
+  <details class="mt-10 rounded-xl border border-neutral-800 bg-neutral-900/60 p-4">
+    <summary class="cursor-pointer select-none text-sm text-neutral-400">탭 위장 / 설정</summary>
+    <div class="mt-4 space-y-3 text-sm">
+      <label class="block">프리셋
+        <select id="preset" class="mt-1 w-full rounded-lg bg-neutral-900 border border-neutral-800 px-3 py-2">
+          <option value="">직접 입력</option>
+        </select>
+      </label>
+      <label class="block">탭 제목
+        <input id="title" class="mt-1 w-full rounded-lg bg-neutral-900 border border-neutral-800 px-3 py-2" placeholder="예: 문서 - 내 문서">
+      </label>
+      <label class="block">파비콘 URL (https:// 또는 data:)
+        <input id="icon" class="mt-1 w-full rounded-lg bg-neutral-900 border border-neutral-800 px-3 py-2" placeholder="비워두면 기본">
+      </label>
+      <label class="block">접근 키 (서버에 ACCESS_KEY를 설정한 경우)
+        <input id="key" type="password" class="mt-1 w-full rounded-lg bg-neutral-900 border border-neutral-800 px-3 py-2">
+      </label>
+      <label class="flex items-center gap-2"><input id="pill" type="checkbox" checked> 프록시 페이지에 미니 툴바(⋯) 표시</label>
+      <div class="flex flex-wrap gap-2 pt-1">
+        <button id="save" class="rounded-lg bg-sky-600 px-4 py-2 text-white">저장</button>
+        <button id="clr" class="rounded-lg bg-neutral-800 px-4 py-2">쿠키 삭제</button>
+        <button id="rst" class="rounded-lg bg-neutral-800 px-4 py-2">전체 초기화</button>
+      </div>
+    </div>
+  </details>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const LS = 'px-cfg';
+  const icon = (e) => 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">' + e + '</text></svg>');
+  const PRESETS = {
+    '문서':   { title: '문서 - 내 문서', icon: icon('📄') },
+    '메모':   { title: '메모장',        icon: icon('📝') },
+    '새 탭':  { title: '새 탭',         icon: icon('➕') },
+    '계산기': { title: 'Calculator',    icon: icon('🧮') }
+  };
+  for (const k in PRESETS) $('preset').add(new Option(k, k));
+
+  let cfg = {};
+  try { cfg = JSON.parse(localStorage.getItem(LS)) || {}; } catch {}
+
+  const applyCloak = () => {
+    document.title = cfg.title || 'Light Proxy';
+    $('fav').href = cfg.icon || 'data:,';
+  };
+  const fillForm = () => {
+    $('title').value = cfg.title || '';
+    $('icon').value = cfg.icon && cfg.icon.startsWith('data:') ? '' : (cfg.icon || '');
+    $('key').value = cfg.key || '';
+    $('pill').checked = cfg.pill !== false;
+  };
+  const say = (t) => { $('msg').textContent = t; };
+
+  // ---- Service Worker ----
+  const push = (w) => w && w.postMessage({ type: 'cfg', cfg: {
+    title: cfg.title || '', icon: cfg.icon || '', pill: cfg.pill !== false, key: cfg.key || '' } });
+
+  const swReady = (async () => {
+    if (!('serviceWorker' in navigator)) throw new Error('Service Worker 미지원 (HTTPS 필요)');
+    await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
+    const reg = await navigator.serviceWorker.ready;
+    push(reg.active);
+    return reg.active;
+  })().catch((e) => { say(e.message); });
+
+  // ---- URL 처리 ----
+  const enc = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const DOMAIN = /^([\w-]+\.)+[a-z]{2,}(:\d+)?([/?#]\S*)?$/i;
+  const normalize = (v) => {
+    v = v.trim();
+    if (!v) return '';
+    if (/^https?:\/\//i.test(v)) return v;
+    if (DOMAIN.test(v)) return 'https://' + v;
+    return 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(v);
+  };
+
+  $('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = normalize($('q').value);
+    if (!url) return;
+    say('연결 중…');
+    const w = await swReady;
+    if (!w) return;
+    location.assign('/service/' + enc(url));
+  });
+
+  // ---- 설정 ----
+  $('preset').addEventListener('change', (e) => {
+    const p = PRESETS[e.target.value];
+    if (!p) return;
+    $('title').value = p.title;
+    $('icon').value = '';
+    cfg.icon = p.icon;
+  });
+  $('save').addEventListener('click', async () => {
+    const presetIcon = PRESETS[$('preset').value]?.icon;
+    cfg = {
+      title: $('title').value.trim(),
+      icon: $('icon').value.trim() || presetIcon || '',
+      key: $('key').value,
+      pill: $('pill').checked
+    };
+    localStorage.setItem(LS, JSON.stringify(cfg));
+    applyCloak();
+    push(await swReady);
+    say('저장되었습니다.');
+  });
+  $('clr').addEventListener('click', async () => {
+    const w = await swReady;
+    w && w.postMessage({ type: 'clear' });
+    say('프록시 쿠키를 삭제했습니다.');
+  });
+  $('rst').addEventListener('click', async () => {
+    localStorage.removeItem(LS);
+    for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+    if (self.indexedDB) indexedDB.deleteDatabase('px');
+    say('초기화 완료. 새로고침하세요.');
+  });
+
+  fillForm();
+  applyCloak();
+})();
+</script>
+</body>
+</html>
